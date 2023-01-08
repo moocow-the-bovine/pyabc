@@ -584,7 +584,7 @@ class Tune(object):
 
         tokens = []
         for i,line in enumerate(tune):
-            print(line)
+            #print(line)
             line = line.rstrip()
 
             if len(line) > 2 and line[1] == ':' and (line[0] == '+' or line[0] in tune_body_fields):
@@ -609,7 +609,7 @@ class Tune(object):
                         continue
 
                 # Space
-                m = re.match(r'(\s+)', part)
+                m = re.match(r'(\s+|\\)', part)
                 if m is not None:
                     tokens.append(Space(line=i, char=j, text=m.group()))
                     j += m.end()
