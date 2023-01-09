@@ -1,4 +1,5 @@
 from __future__ import division
+import copy
 import re, sys
 
 
@@ -66,6 +67,7 @@ X:reference number  no      yes     no      no      instruction
 Z:transcription     yes     yes     no      no      string
 """
 
+##======================================================================
 class InfoKey(object):
     def __init__(self, key, name, file_header, tune_header, tune_body, inline, type):
         self.key = key  # single-letter field identifier
@@ -116,7 +118,7 @@ key_sig = {'C#': 7, 'F#': 6, 'B': 5, 'E': 4, 'A': 3, 'D': 2, 'G': 1, 'C': 0,
 sharp_order = "FCGDAEB"
 flat_order = "BEADGCF"
 
-
+##======================================================================
 class Key(object):
     def __init__(self, name=None, root=None, mode=None):
         if name is not None:
@@ -200,7 +202,7 @@ class Key(object):
     def __repr__(self):
         return "<Key %s %s>" % (self.root.name, self.mode)
 
-
+##======================================================================
 class Pitch(object):
     def __init__(self, value, octave=None):
         if isinstance(value, Note):
@@ -292,7 +294,7 @@ class Pitch(object):
     def __sub__(self, x):
         return Pitch(self.value-x, octave=self.octave)
 
-
+##======================================================================
 class TimeSignature(object):
     def __init__(self, meter, unit_len, tempo=None):
         meter = meter.replace('C|', '2/2').replace('C', '4/4')
@@ -302,6 +304,14 @@ class TimeSignature(object):
 
     def __repr__(self):
         return "<TimeSignature %d/%d>" % tuple(self._meter)
+
+    def bar_length(self):
+        """Return length of a bar in elementary units"""
+        return (
+            (self._meter[0] / self._meter[1])
+            /
+            (self._unit[0] / self._unit[1])
+        )
 
 
 # Decoration symbols from
@@ -361,7 +371,7 @@ symbols = """
 """
 
 
-
+##======================================================================
 class Token(object):
     def __init__(self, line, char, text):
         self._line = line
@@ -369,24 +379,17 @@ class Token(object):
         self._text = text
 
     def __repr__(self):
-        return "<%s \"%s\">" % (self.__class__.__name__, self._text)
+        return "<%s %s>" % (self.__class__.__name__, repr(self._text))
 
+    def __str__(self):
+        return self._text
 
-class Note(Token):
-    def __init__(self, key, time, note, accidental, octave, num, denom, **kwds):
+class Extended(Token):
+    """Token with a length (Pitch or Rest)"""
+    def __init__(self, time, num, denom, **kwds):
         Token.__init__(self, **kwds)
-        self.key = key
         self.time_sig = time
-        self.note = note
-        self.accidental = accidental
-        self.octave = octave
         self._length = (num, denom)
-
-    @property
-    def pitch(self):
-        """Chromatic note value taking into account key signature and transpositions.
-        """
-        return Pitch(self)
 
     @property
     def length(self):
@@ -396,6 +399,20 @@ class Note(Token):
     @property
     def duration(self):
         return self.length[0] / self.length[1]
+
+class Note(Extended):
+    def __init__(self, key, time, note, accidental, octave, num, denom, **kwds):
+        Extended.__init__(self, time, num, denom, **kwds)
+        self.key = key
+        self.note = note
+        self.accidental = accidental
+        self.octave = octave
+
+    @property
+    def pitch(self):
+        """Chromatic note value taking into account key signature and transpositions.
+        """
+        return Pitch(self)
 
     def dotify(self, dots, direction):
         """Apply dot(s) to the duration of this note.
@@ -413,7 +430,6 @@ class Note(Token):
         else:
             den = den * 2
             self._length = (num, den)
-
 
 
 class Beam(Token):
@@ -435,7 +451,8 @@ class Newline(Token):
 
 class Continuation(Token):
     """  \\ at end of line  """
-    pass
+    def __str__(self):
+        return self._text + '\n'
 
 class GracenoteBrace(Token):
     """  {  {/  or }  """
@@ -464,19 +481,31 @@ class Tuplet(Token):
         self.num = num
 
 class BodyField(Token):
-    pass
+    def __str__(self):
+        return self._text + '\n'
 
 class InlineField(Token):
-    pass
+    @property
+    def content(self):
+        return self._text.lstrip('[').rstrip(']')
 
-class Rest(Token):
-    def __init__(self, symbol, num, denom, **kwds):
+    @property
+    def key(self):
+        return self.content.split(':', 1)[0]
+
+    @property
+    def value(self):
+        return self.content.split(':', 1)[1]
+
+class Rest(Extended):
+    def __init__(self, symbol, time, num, denom, **kwds):
         # char==X or Z means length is in measures
-        Token.__init__(self, **kwds)
+        Extended.__init__(self, time, num, denom, **kwds)
         self.symbol = symbol
-        self.length = (num, denom)
+        self.length_ = (num, denom)
 
 
+##======================================================================
 class InfoContext(object):
     """Keeps track of current information fields
     """
@@ -493,7 +522,7 @@ class InfoContext(object):
         f2._fields.update(fields)
         return f2
 
-
+##======================================================================
 class Tune(object):
     """Initialize with either an ABC string or a json-parsed dict read from
     the TheSession API.
@@ -609,7 +638,7 @@ class Tune(object):
                         continue
 
                 # Space
-                m = re.match(r'(\s+|\\)', part)
+                m = re.match(r'(\s+)', part)
                 if m is not None:
                     tokens.append(Space(line=i, char=j, text=m.group()))
                     j += m.end()
@@ -666,7 +695,12 @@ class Tune(object):
                 m = re.match(r'([XZxz])(\d+)?(/(\d+)?)?', part)
                 if m is not None:
                     g = m.groups()
-                    tokens.append(Rest(g[0], num=g[1], denom=g[3], line=i, char=j, text=m.group()))
+                    if g[0].isupper():
+                        # char==X or Z means length is in measures
+                        num = int(g[1]) * time_sig.bar_length()
+                    else:
+                        num = int(g[1])
+                    tokens.append(Rest(g[0], time=time_sig, num=num, denom=g[3], line=i, char=j, text=m.group()))
 
                     if pending_dots is not None:
                         tokens[-1].dotify(pending_dots, 'right')
@@ -715,7 +749,8 @@ class Tune(object):
                     continue
 
                 # Continuation
-                if j == len(line) - 1 and j == '\\':
+                #if j == len(line) - 1 and j == '\\':
+                if re.match(r'\s*\\\s*$', part):
                     tokens.append(Continuation(line=i, char=j, text='\\'))
                     j += 1
                     continue
@@ -748,7 +783,172 @@ class Tune(object):
             hist[v] = hist.get(v, 0) + note.duration
         return hist
 
+    @property
+    def canonical(self):
+        """'canonical' abc content; from tokens"""
+        return ''.join(map(str, self.tokens))
 
+    def imply_parts(self):
+        """
+        Adds [P:] labels to self.tokens after || bars, only if no labels are present.
+        Invalidates unsevered phrases and self.abc.
+        """
+        part_bars = []
+        for j in range(len(self.tokens)):
+            tok = self.tokens[j]
+            if isinstance(tok, InlineField) and tok.key == 'P':
+                return self
+            elif isinstance(tok, Beam) and str(tok).endswith('||'):
+                part_bars.append(j)
+        if not part_bars:
+            return
+
+        # add part labels after every part bar
+        part_bars = list(zip(
+            [-1, *part_bars],
+            [chr(ord('A') + i) for i in range(len(part_bars) + 1)]
+        ))
+        for offset, label in reversed(part_bars):
+            self.tokens.insert(
+                offset + 1,
+                InlineField(-1, -1, f'[P:{label}]')
+            )
+        return self
+
+
+
+##======================================================================
+class Phrase:
+    def __init__(self, tune, start=0, end=None, label=None):
+        self.tune = tune
+        self.label = label
+        self.start = start
+        self.end = end if end is not None else len(tune.tokens)
+
+    def sever(self):
+        """Sever from original tune (copies)"""
+        self.tune = copy.deepcopy(self.tune)
+        return self
+
+    @property
+    def tokens(self):
+        return self.tune.tokens[self.start:self.end]
+
+    @property
+    def abc(self):
+        tokens = self.tokens
+        for i in range(len(self)):
+            if not str(tokens[i]).isspace():
+                break
+        return ''.join(map(str, tokens[i:]))
+
+    def __len__(self):
+        return self.end - self.start
+
+    def __bool__(self):
+        return len(self) != 0
+
+    def __repr__(self):
+        return f'{type(self).__name__}(X{self.tune.reference}[{self.start}:{self.end}], {repr(self.label)})'
+
+    def __str__(self):
+        hdr = '\n'.join([
+            f'X:{self.xid}',
+            f'T:{self.label}',
+            f'K:{self.tune.key}',
+        ])
+        return f'{hdr}\n{self.abc}'.strip() + '\n'
+
+    @property
+    def length(self):
+        """Length in beats"""
+        return sum([
+            x.length for x in self.tokens
+            if hasattr(x, 'length')
+        ])
+
+    @property
+    def duration(self):
+        return sum([
+            x.duration for x in self.tokens
+            if hasattr(x, 'duration')
+        ])
+
+    _id2x = {None: 0}
+    @property
+    def xid(self):
+        try:
+            return self._id2x[id(self)]
+        except KeyError:
+            pass
+        self._id2x[id(self)] = len(self._id2x)
+        return self._id2x[id(self)]
+
+
+    def slice(self, start=0, end=None, label=None):
+        """start, end are relative to self"""
+        end = end if end is not None else len(self)
+        label = f'{self.label}[{start}:{end}]' if label is None else label
+        return type(self)(self.tune, self.start+start, self.start+end, label)
+
+    def by_part(self, label=''):
+        """return a list of sub-phrases by part: (label, subphrase)"""
+        parts = []
+        tokens = self.tokens
+        i = 0
+        for j in range(i, len(tokens)):
+            tok = tokens[j]
+            if isinstance(tok, InlineField) and str(tok).startswith('[P:'):
+                iend = preceding_bar(tokens, j)
+                if iend > i:
+                    parts.append((label, self.slice(i, iend + 1)))
+                    i = iend + 1
+                label = re.match(r'\[P:(.*)\]', str(tok)).group(1).strip()
+        # final
+        if i < len(tokens):
+            parts.append((label, self.slice(i)))
+        return parts
+
+    def by_bar(self):
+        """
+        yield a stream of pairs (bar_number, subphrase) of phrases by bar-number.
+        - bar numbers are only incremented on full bars (according to tune timesig)
+        - intro bar (if present) has bar-number 0
+        - first full bar has bar-number 1
+        """
+        tokens = self.tokens
+        bar_offsets = [
+            i for i in range(len(tokens))
+            if isinstance(tokens[i], Beam)
+        ]
+        start = 0
+        for bi in bar_offsets:
+            bphrase = self.slice(start, bi + 1)
+            dur = bphrase.duration
+            print(f'(dur={dur}): {bphrase}')
+            start = bi + 1
+        return bar_offsets
+
+
+##======================================================================
+## moo: utils
+
+def preceding_bar(tokens, offset):
+    """Return index of last Beam at-or-before offset (inclusive), or -1"""
+    for j in range(offset, -1, -1):
+        if isinstance(tokens[j], Beam):
+            return j
+    return -1
+
+def following_bar(tokens, offset):
+    """Return index of first Beam at-or-after offset, or len(tokens)"""
+    for j in range(offset, len(tokens)):
+        if isinstance(tokens[j], Beam):
+            return j
+    return len(tokens)
+
+
+##======================================================================
 def get_thesession_tunes():
     import os, json
     if not os.path.isfile("tunes.json"):
@@ -763,6 +963,7 @@ def get_thesession_tunes():
     return json.loads(open('tunes.json', 'rb').read().decode('utf8'))
 
 
+##======================================================================
 if __name__ == '__main__':
     ts_tunes = get_thesession_tunes()
     for i,t in enumerate(ts_tunes):
