@@ -305,12 +305,13 @@ class TimeSignature(object):
     def __repr__(self):
         return "<TimeSignature %d/%d>" % tuple(self._meter)
 
+    @property
     def bar_length(self):
         """Return length of a bar in elementary units"""
         return (
             (self._meter[0] / self._meter[1])
             /
-            (self._unit[0] / self._unit[1])
+            (self._unit_len[0] / self._unit_len[1])
         )
 
 
@@ -609,6 +610,7 @@ class Tune(object):
                 unit = "1/8"
         tempo = self.header.get('tempo', None)
         time_sig = TimeSignature(meter, unit, tempo)
+        setattr(self, 'time_sig', time_sig)
 
 
         tokens = []
@@ -860,15 +862,8 @@ class Phrase:
         return f'{hdr}\n{self.abc}'.strip() + '\n'
 
     @property
-    def length(self):
-        """Length in beats"""
-        return sum([
-            x.length for x in self.tokens
-            if hasattr(x, 'length')
-        ])
-
-    @property
     def duration(self):
+        """Duration in beat units"""
         return sum([
             x.duration for x in self.tokens
             if hasattr(x, 'duration')
@@ -909,6 +904,8 @@ class Phrase:
             parts.append((label, self.slice(i)))
         return parts
 
+    # TODO: better partial bar handling
+    # - return partial bars as their own objects (give then fractional offset keys)?
     def by_bar(self):
         """
         yield a stream of pairs (bar_number, subphrase) of phrases by bar-number.
@@ -921,13 +918,23 @@ class Phrase:
             i for i in range(len(tokens))
             if isinstance(tokens[i], Beam)
         ]
+        bar_number = 0
         start = 0
+        bar_length = self.tune.time_sig.bar_length
         for bi in bar_offsets:
             bphrase = self.slice(start, bi + 1)
-            dur = bphrase.duration
-            print(f'(dur={dur}): {bphrase}')
+            bduration = bphrase.duration
+            if bduration < bar_length:
+                continue
+            elif bar_number == 0:
+                bar_number = 1
+            yield (bar_number, bphrase)
             start = bi + 1
-        return bar_offsets
+            bar_number += 1
+        # final (unterminated) bar
+        bphrase = self.slice(start)
+        if bphrase.duration:
+            yield (bar_number, bphrase)
 
 
 ##======================================================================
