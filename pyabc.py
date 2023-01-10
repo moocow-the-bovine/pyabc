@@ -904,38 +904,54 @@ class Phrase:
             parts.append((label, self.slice(i)))
         return parts
 
+    def bars(self):
+        """
+        yield a stream of subphrases separted by bars.
+        Bar tokens are included with preceding content.
+        No length checking.
+        """
+        tokens = self.tokens
+        start = 0
+        bar = 0
+        while start < len(tokens):
+            end = following_bar(tokens, start) + 1
+            yield self.slice(start, end, label=f'{self.label}:b{bar}')
+            start = end
+            bar += 1
+
     # TODO: better partial bar handling
     # - return partial bars as their own objects (give then fractional offset keys)?
     def by_bar(self):
         """
-        yield a stream of pairs (bar_number, subphrase) of phrases by bar-number.
-        - bar numbers are only incremented on full bars (according to tune timesig)
-        - intro bar (if present) has bar-number 0
+        return a dictionary from bar-numbers to sub-phrases
         - first full bar has bar-number 1
+        - bar numbers are only incremented on full bars (according to tune timesig)
+        - partial intro bar(s) (if present) have bar-number 0
+        #- other partial bars are attached to preceding bar
         """
         tokens = self.tokens
-        bar_offsets = [
-            i for i in range(len(tokens))
-            if isinstance(tokens[i], Beam)
-        ]
-        bar_number = 0
-        start = 0
+        bars_raw = list(self.bars())
         bar_length = self.tune.time_sig.bar_length
-        for bi in bar_offsets:
-            bphrase = self.slice(start, bi + 1)
-            bduration = bphrase.duration
-            if bduration < bar_length:
-                continue
-            elif bar_number == 0:
-                bar_number = 1
-            yield (bar_number, bphrase)
-            start = bi + 1
-            bar_number += 1
-        # final (unterminated) bar
-        bphrase = self.slice(start)
-        if bphrase.duration:
-            yield (bar_number, bphrase)
-
+        bar_number = 0
+        bars = {}
+        for bar in bars_raw:
+            if bar_number == 0 and bar.duration < bar_length:
+                # intro bar(s)
+                bar.label = re.sub(r':b\d+$', f':b{bar_number}', bar.label)
+                try:
+                    bars[0].end = bar.end
+                except KeyError:
+                    bars[0] = bar
+            #elif bar.duration < bar_length:
+            #    # partial bar: append to left neighbor
+            #    bars[bar_number - 1].end = bar.end
+            else:
+                # complete bar
+                bar_number = max(1, bar_number)
+                bars[bar_number] = bar
+                bar.label = re.sub(r':b\d+$', f':b{bar_number}', bar.label)
+                bar_number += 1
+        return bars
 
 ##======================================================================
 ## moo: utils
