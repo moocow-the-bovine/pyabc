@@ -181,7 +181,7 @@ def select_phrases(tunes, part=None, bar=None, **kwargs):
         phrases = buf
 
     ##-- phrases by bar (ranges)
-    if bar is not None:
+    if bar:
         buf = []
         for p in phrases:
             buf.extend(part_bars(p, bar_ranges=bar))
@@ -217,6 +217,32 @@ def part_bars(parent_phrase, bar_ranges):
             bars.label = re.sub(r':b\d+$', rf'#b{rng[0]}:{rng[1]}', bars.label)
             yield bars
 
+##======================================================================
+## command: jsonl
+@cli.command()
+@click.option('-e', '-x', '--id', 'ids', type=str, default='',
+              help='tune selection list (ranges): reference (X:)')
+@click.option('-o', '--output', type=click.File('w', encoding='utf8'), default='-',
+              help='output file')
+@click.argument('abcfile', type=click.File('r', encoding='utf8'), default='-')
+def jsonl(abcfile, output, ids):
+    """
+    Print verbose tune abc tokens as JSONL (1 token per line).
+    """
+    tunes = load_tunes(abcfile)
+    tunes = list(select_tunes(tunes, ids=parse_ranges(ids)))
+    import json
+    for tune in tunes:
+        tune.imply_parts()
+        tune_info = {'reference': tune.reference, 'title': tune.title, 'header': tune.header, 'key': tune.key}
+        for ctx, token in verbose_tokens(tune.tokens, {'key':tune.key, 'bar':1}):
+            row = token.to_json()
+            row['tune'] = tune_info
+            row['context'] = ctx
+            json.dump(row, output, separators=(',', ':'))
+            output.write('\n')
+        output.write('\n')
+
 ##--------------------------------------------------------------
 def verbose_tokens(tokens, defaults=None):
     """
@@ -227,6 +253,8 @@ def verbose_tokens(tokens, defaults=None):
     - key: KEY (str)
     - line: LINE (int)
     - chord: CHORD (str)
+    #TODO: beat (tic)
+    #  - or break down into float "{beat}.{btic}" or pair [beat,btic]
     """
     if defaults is None:
         attrs = {}
@@ -239,7 +267,7 @@ def verbose_tokens(tokens, defaults=None):
     attrs.setdefault('chord', None)
 
     for tok in tokens:
-        if isinstance(tok, pyabc.InlineField) and str(tok).startswith('[P:'):
+        if isinstance(tok, (pyabc.InlineField, pyabc.BodyField)) and str(tok).startswith('[P:'):
             ##-- part label
             attrs['part'] = re.match(r'\[P:(.*)\]', str(tok)).group(1).strip()
         elif isinstance(tok, pyabc.BodyField) and str(tok).startswith('K:'):
@@ -248,12 +276,58 @@ def verbose_tokens(tokens, defaults=None):
         elif isinstance(tok, pyabc.Beam):
             ##-- measure bar
             attrs['bar'] += 1
-        elif isinstance(tok, 'Newline'):
+        elif isinstance(tok, pyabc.Newline):
             ##-- newline
             attrs['line'] += 1
         elif isinstance(tok, pyabc.ChordSymbol):
             attrs['chord'] = str(tok).strip('"')
         yield copy.copy(attrs), tok
+
+
+##======================================================================
+## command: tokens
+@cli.command()
+@click.option('-e', '-x', '--id', 'ids', type=str, default='',
+              help='tune selection list (ranges): reference (X:)')
+##-- TODO: move to 'filter' command
+@click.option('-n/-N', '--notes/--no-notes', type=bool, default=True,
+              help="Do/don't print notes & rests (default=do)")
+@click.option('-b/-B', '--bars/--no-bars', type=bool, default=True,
+              help="Do/don't print bars (default=do't)")
+@click.option('-c/-C', '--chords/--no-chords', type=bool, default=True,
+              help="Do/don't print chord symbols (default=do)")
+@click.option('-i/-I', '--inline/--no-inline', type=bool, default=False,
+              help="Do/don't print inline fields (default=don't)")
+@click.option('-d/-D', '--decorations/--no-decorations', type=bool, default=False,
+              help="Do/don't print decorations, slurs, ties, gracenotes etc. (default=don't)")
+##--/TODO
+@click.argument('abcfile', type=click.File('r', encoding='utf8'), default='-')
+def tokens(abcfile, ids, notes, bars, chords, inline, decorations):
+    """
+    Print abc content tokens.
+    - 1 token per line
+    - tunes separated by a blank line
+    """
+    tunes = load_tunes(abcfile)
+    tunes = list(select_tunes(tunes, ids=parse_ranges(ids)))
+    def try_print(tok, flag, types):
+        if isinstance(tok, types):
+            if flag: print(str(tok))
+            return True
+        return False
+
+    for tune in tunes:
+        for tok in tune.tokens:
+            if isinstance(tok, (pyabc.Space, pyabc.Newline, pyabc.Continuation)):
+                continue
+            elif try_print(tok, notes, pyabc.Extended): pass
+            elif try_print(tok, bars, pyabc.Beam): pass
+            elif try_print(tok, chords, pyabc.ChordSymbol): pass
+            elif try_print(tok, inline,  pyabc.InlineField): pass
+            elif decorations:
+                print(str(tok))
+        print('')
+
 
 ##======================================================================
 ## TODO
@@ -276,10 +350,13 @@ def verbose_tokens(tokens, defaults=None):
 ##   + [ ] notes-only
 ##      - [ ] remove gracenotes, bars, inline fields, chords, ...
 ##   + [ ] transpose (give target key?)
+##   + [ ] set chords (or copy progression from other tune):
+##     - get-chords | set-chords ?
 ## - filter
 ##   + [ ] remove metatadata (-> notes only)
 ## - counts
-##   + [ ] ngrams (phrases?)
+##   + [ ] ngrams (phrases?) --> only starting on full beat?  on beat 1 or 3?
+##     - raw ngrams can be e.g.: python ./abcgrep.py tokens -n -C - | tt-ngrams.perl -n 2
 ##   + [ ] measures (phrases)
 ## - grouping
 ##   + [ ] by "melodic signature":

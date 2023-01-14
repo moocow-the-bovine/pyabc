@@ -128,6 +128,10 @@ class Key(object):
             self.root = Pitch(root)
             self.mode = mode
 
+    def to_json(self):
+        root = self.root.name if self.root is not None else None
+        return [root, self.mode]
+
     def parse_key(self, key):
         # highland pipe keys
         if key in ['HP', 'Hp']:
@@ -256,6 +260,14 @@ class Pitch(object):
     def abs_value(self):
         return self.value + self.octave * 12
 
+    def to_json(self):
+        return {
+            'name': self.name,
+            'value': self.value,
+            'octave': self.octave,
+            'abs_value': self.abs_value,
+        }
+
     @staticmethod
     def pitch_value(pitch, root='C'):
         """Convert a pitch string like "A#" to a chromatic scale value relative
@@ -304,6 +316,13 @@ class TimeSignature(object):
 
     def __repr__(self):
         return "<TimeSignature %d/%d>" % tuple(self._meter)
+
+    def __str__(self):
+        return '\n'.join(filter(bool, [
+            f'M:{self._meter[0]}/{self._meter[1]}',
+            f'M:{self._unit_len[0]}/{self._unit_len[1]}',
+            (f'T:{self_tempo}' if self._tempo else None),
+        ]))
 
     @property
     def bar_length(self):
@@ -385,6 +404,10 @@ class Token(object):
     def __str__(self):
         return self._text
 
+    def to_json(self):
+        """Return a JSON-safe dictionary representing this token"""
+        return {'text':self._text, 'line':self._line, 'char':self._char, 'type':type(self).__name__}
+
 class Extended(Token):
     """Token with a length (Pitch or Rest)"""
     def __init__(self, time, num, denom, **kwds):
@@ -394,12 +417,20 @@ class Extended(Token):
 
     @property
     def length(self):
+        """Event length in tics (rational tuple)"""
         n,d = self._length
         return (int(n) if n is not None else 1, int(d) if d is not None else 1)
 
     @property
     def duration(self):
+        """Event duration in tics (float)"""
         return self.length[0] / self.length[1]
+
+    def to_json(self):
+        data = super().to_json()
+        data['length'] = list(self.length)
+        data['duration'] = self.duration
+        return data
 
 class Note(Extended):
     def __init__(self, key, time, note, accidental, octave, num, denom, **kwds):
@@ -431,6 +462,15 @@ class Note(Extended):
         else:
             den = den * 2
             self._length = (num, den)
+
+    def to_json(self):
+        data = super().to_json()
+        data['key'] = self.key.to_json()
+        data['note'] = self.note
+        data['accidental'] = self.accidental
+        data['octave'] = self.octave
+        data['pitch'] = self.pitch.to_json()
+        return data
 
 
 class Beam(Token):
@@ -497,6 +537,13 @@ class InlineField(Token):
     @property
     def value(self):
         return self.content.split(':', 1)[1]
+
+    def to_json(self):
+        data = super().to_json()
+        data['key'] = self.key
+        data['value'] = self.value
+        return data
+
 
 class Rest(Extended):
     def __init__(self, symbol, time, num, denom, **kwds):
@@ -811,10 +858,12 @@ class Tune(object):
             [chr(ord('A') + i) for i in range(len(part_bars) + 1)]
         ))
         for offset, label in reversed(part_bars):
-            self.tokens.insert(
-                offset + 1,
-                InlineField(-1, -1, f'[P:{label}]')
-            )
+            for x in (
+                Space(-1, -1, f' '), # othewise parse errors ':|['
+                InlineField(-1, -1, f'[P:{label}]'),
+                Space(-1, -1, f' '), # othewise parse errors ':|['
+            ):
+                self.tokens.insert(offset + 1, x)
         return self
 
 
@@ -857,6 +906,7 @@ class Phrase:
         hdr = '\n'.join([
             f'X:{self.xid}',
             f'T:{self.label}',
+            str(self.tune.time_sig),
             f'K:{self.tune.key}',
         ])
         return f'{hdr}\n{self.abc}'.strip() + '\n'
