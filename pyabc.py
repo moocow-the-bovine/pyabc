@@ -320,7 +320,7 @@ class TimeSignature(object):
     def __str__(self):
         return '\n'.join(filter(bool, [
             f'M:{self._meter[0]}/{self._meter[1]}',
-            f'M:{self._unit_len[0]}/{self._unit_len[1]}',
+            f'L:{self._unit_len[0]}/{self._unit_len[1]}',
             (f'T:{self_tempo}' if self._tempo else None),
         ]))
 
@@ -433,6 +433,7 @@ class Extended(Token):
         return data
 
 class Note(Extended):
+    # TODO: fix duration for triplets etc.
     def __init__(self, key, time, note, accidental, octave, num, denom, **kwds):
         Extended.__init__(self, time, num, denom, **kwds)
         self.key = key
@@ -476,7 +477,10 @@ class Note(Extended):
 class Beam(Token):
     pass
 
-class Space(Token):
+class WhitespaceToken(Token):
+    pass
+
+class Space(WhitespaceToken):
     pass
 
 class Slur(Token):
@@ -487,10 +491,13 @@ class Tie(Token):
     """   -   """
     pass
 
-class Newline(Token):
+class NewlineToken(WhitespaceToken):
     pass
 
-class Continuation(Token):
+class Newline(NewlineToken):
+    pass
+
+class Continuation(NewlineToken):
     """  \\ at end of line  """
     def __str__(self):
         return self._text + '\n'
@@ -832,10 +839,18 @@ class Tune(object):
             hist[v] = hist.get(v, 0) + note.duration
         return hist
 
-    @property
-    def canonical(self):
-        """'canonical' abc content; from tokens"""
+    def body(self):
+        """'canonical' abc body; from self.tokens"""
         return ''.join(map(str, self.tokens))
+
+    def head(self, include_reference=True):
+        """abc header, from self.abc"""
+        return '\n'.join(filter(
+            lambda l: include_reference or (not l.startswith('X')),
+            [
+                line for line in self.abc.split('\n')
+                if re.match(r'^[A-Z]\s*:', line)
+            ]))
 
     def imply_parts(self):
         """
@@ -872,14 +887,29 @@ class Tune(object):
 class Phrase:
     def __init__(self, tune, start=0, end=None, label=None):
         self.tune = tune
-        self.label = label
+        self.label = label if label is not None else tune.title
         self.start = start
         self.end = end if end is not None else len(tune.tokens)
 
-    def sever(self):
-        """Sever from original tune (copies)"""
+    def sever(self, trim=False):
+        """
+        Sever from original tune (copies).
+        If ``trim`` is true, restricts tune tokens to the selected range.
+        """
         self.tune = copy.deepcopy(self.tune)
+        if trim:
+            self.tune.tokens = self.tune.tokens[self.start:self.end]
+            self.start = 0
+            self.end = len(self.tune.tokens)
         return self
+
+    def as_tune(self):
+        """Promote to tune"""
+        tune = copy.deepcopy(self.tune)
+        tune.tokens = self.tune.tokens[self.start:self.end]
+        tune.title += f' ({self.label})'
+        tune.abc = self.abc
+        return tune
 
     @property
     def tokens(self):
@@ -902,14 +932,19 @@ class Phrase:
     def __repr__(self):
         return f'{type(self).__name__}(X{self.tune.reference}[{self.start}:{self.end}], {repr(self.label)})'
 
-    def __str__(self):
-        hdr = '\n'.join([
+    def head(self, *args, **kwargs):
+        return '\n'.join([
             f'X:{self.xid}',
             f'T:{self.label}',
             str(self.tune.time_sig),
             f'K:{self.tune.key}',
-        ])
-        return f'{hdr}\n{self.abc}'.strip() + '\n'
+        ]).strip()
+
+    def body(self):
+        return self.abc.strip()
+
+    def __str__(self):
+        return f'{self.head()}\n{self.body()}' + '\n'
 
     @property
     def duration(self):
@@ -1002,6 +1037,41 @@ class Phrase:
                 bar.label = re.sub(r':b\d+$', f':b{bar_number}', bar.label)
                 bar_number += 1
         return bars
+
+    def prune(self, want=None, default=False):
+        """
+        Return a new trim-severed Phrase containing only those abc tokens
+        for which ``want.get(typename, default)`` returns true.
+        """
+        if want is None:
+            want = {
+                'Note': True,
+                'Rest': True,
+                'Beam': True,
+                'ChordSymbol': True,
+                'InlineField': False,
+                'BodyField': False,
+                'Space': True,
+                'Newline': True,
+                'Continuation': True,
+            }
+        pruned = self.sever(trim=True)
+        pruned.label += ':prune'
+        tokens = []
+        last_was_space = False
+        for tok in pruned.tune.tokens:
+            if isinstance(tok, Space) and last_was_space:
+                # skip repeated spaces
+                continue
+            elif want.get(type(tok).__name__, default):
+                tokens.append(tok)
+            elif isinstance(tok, NewlineToken) and want.get('Space', default) and not last_was_space:
+                # bash newlines & continuations to spaces
+                tokens.append(Space(-1, -1, ' '))
+            last_was_space = isinstance(tok, WhitespaceToken)
+        pruned.tune.tokens = tokens
+        return pruned
+
 
 ##======================================================================
 ## moo: utils

@@ -285,48 +285,100 @@ def verbose_tokens(tokens, defaults=None):
 
 
 ##======================================================================
+## command: prune
+@cli.command()
+@click.option('-e', '-x', '--id', 'ids', type=str, default='',
+              help='tune selection list (ranges): reference (X:)')
+@click.option('-n/-N', '--notes/--no-notes', type=bool, default=True,
+              help="Do/don't include notes & rests (default=do)")
+@click.option('-b/-B', '--bars/--no-bars', type=bool, default=True,
+              help="Do/don't include bars/beams (default=don't)")
+@click.option('-c/-C', '--chords/--no-chords', type=bool, default=True,
+              help="Do/don't nclude chord symbols (default=do)")
+@click.option('-s/-S', '--spaces/--no-spaces', type=bool, default=True,
+              help="Do/don't include spaces (default=do)")
+@click.option('-l/-L', '--lines/--no-lines', type=bool, default=True,
+              help="Do/don't include newlines & continuations (default=do)")
+@click.option('-f/-F', '--fields/--no-fields', type=bool, default=False,
+              help="Do/don't include inline & body fields (default=don't)")
+@click.option('-d/-D', '--decorations/--no-decorations', type=bool, default=False,
+              help="Do/don't include decorations, slurs, ties, gracenotes etc. (default=don't)")
+#TODO: Slur, Tie, Annotation, Tuplet
+@click.argument('abcfile', type=click.File('r', encoding='utf8'), default='-')
+def prune(abcfile, ids, notes, bars, chords, spaces, lines, fields, decorations):
+    """
+    Prune abc content tokens.
+    """
+    tunes = load_tunes(abcfile)
+    tunes = list(select_tunes(tunes, ids=parse_ranges(ids)))
+
+    for tune in tunes:
+        phrase = Phrase(tune).prune({
+            'Note': notes,
+            'Beam': bars,
+            'ChordSymbol': chords,
+            'ChordBracket': chords,
+            'Space': spaces,
+            'Newline': lines,
+            'Continuation': lines,
+            'InlineField': fields,
+            'BodyField': fields,
+        }, default=decorations)
+        print(str(phrase))
+
+
+##======================================================================
 ## command: tokens
 @cli.command()
 @click.option('-e', '-x', '--id', 'ids', type=str, default='',
               help='tune selection list (ranges): reference (X:)')
-##-- TODO: move to 'filter' command
-@click.option('-n/-N', '--notes/--no-notes', type=bool, default=True,
-              help="Do/don't print notes & rests (default=do)")
-@click.option('-b/-B', '--bars/--no-bars', type=bool, default=True,
-              help="Do/don't print bars (default=do't)")
-@click.option('-c/-C', '--chords/--no-chords', type=bool, default=True,
-              help="Do/don't print chord symbols (default=do)")
-@click.option('-i/-I', '--inline/--no-inline', type=bool, default=False,
-              help="Do/don't print inline fields (default=don't)")
-@click.option('-d/-D', '--decorations/--no-decorations', type=bool, default=False,
-              help="Do/don't print decorations, slurs, ties, gracenotes etc. (default=don't)")
-##--/TODO
 @click.argument('abcfile', type=click.File('r', encoding='utf8'), default='-')
-def tokens(abcfile, ids, notes, bars, chords, inline, decorations):
+def tokens(abcfile, ids):
     """
-    Print abc content tokens.
+    Print abc content tokens (see also 'prune')
     - 1 token per line
     - tunes separated by a blank line
     """
     tunes = load_tunes(abcfile)
     tunes = list(select_tunes(tunes, ids=parse_ranges(ids)))
-    def try_print(tok, flag, types):
-        if isinstance(tok, types):
-            if flag: print(str(tok))
-            return True
-        return False
-
     for tune in tunes:
         for tok in tune.tokens:
             if isinstance(tok, (pyabc.Space, pyabc.Newline, pyabc.Continuation)):
                 continue
-            elif try_print(tok, notes, pyabc.Extended): pass
-            elif try_print(tok, bars, pyabc.Beam): pass
-            elif try_print(tok, chords, pyabc.ChordSymbol): pass
-            elif try_print(tok, inline,  pyabc.InlineField): pass
-            elif decorations:
-                print(str(tok))
+            print(str(tok))
         print('')
+
+
+##======================================================================
+## command: cat
+@cli.command()
+@click.option('-e', '-x', '--id', 'ids', type=str, default='',
+              help='tune selection list (ranges): reference (X:)')
+@click.option('-m/-M', '--meta/--no-meta', type=bool, default=True,
+              help="do/don't include metadata comments (default=do)")
+@click.argument('abcfile', type=click.File('r', encoding='utf8'), default='-')
+def cat(abcfile, ids, meta):
+    """
+    Concatenate multiple tunes to a single tune.  Only first header is retained.
+    """
+    tunes = load_tunes(abcfile)
+    tunes = list(select_tunes(tunes, ids=parse_ranges(ids)))
+    last_was_newline = True
+
+    for i, tune in enumerate(tunes):
+        if i == 0:
+            if not meta:
+                print(Phrase(tune).head())
+            else:
+                print(tune.head())
+        if i != 0:
+            if not last_was_newline:
+                print('\n')
+            if meta:
+                print('\n'.join(map(lambda l: '%' + l, tune.head().split('\n'))))
+            print(pyabc.BodyField(-1, -1, f'K:{tune.key}'), end='')
+        print(tune.body(), end='')
+        last_was_newline = isinstance(tune.tokens[-1], (pyabc.NewlineToken, pyabc))
 
 
 ##======================================================================
@@ -340,10 +392,13 @@ def tokens(abcfile, ids, notes, bars, chords, inline, decorations):
 ##   + [X] by part
 ##     - [X] implicitly add part-labels (if none ever specified)
 ##       + idea: add a part label at every "||" (and maybe ":||"?)
-##   + [ ] by (part &) measure range(s)?
+##   + [X] by (part &) measure range(s)?
 ##   + [ ] by (part & measure &) beat-ranges?
 ##   + [ ] by (part & measure & beat &) n-grams?
 ## - transform
+##   + [ ] "grid" / "typewriter" / "quantize": all notes/rests to unit length
+##     - triplets get bogus length=[1,1], duration=1.0
+##     - maybe first parse to rhythm-tree?
 ##   + [ ] re-sample (transform rhythms, e.g. Ryan's-style 16ths to 8ths under L:1/8)
 ##     - set target note-length?
 ##     - DO THIS: or just bash-down by integer factor (e.g. 2x: 16ths->8ths, 8ths->quarters, etc.)
@@ -353,7 +408,7 @@ def tokens(abcfile, ids, notes, bars, chords, inline, decorations):
 ##   + [ ] set chords (or copy progression from other tune):
 ##     - get-chords | set-chords ?
 ## - filter
-##   + [ ] remove metatadata (-> notes only)
+##   + [~] remove metatadata (-> notes only) ~ "cat"
 ## - counts
 ##   + [ ] ngrams (phrases?) --> only starting on full beat?  on beat 1 or 3?
 ##     - raw ngrams can be e.g.: python ./abcgrep.py tokens -n -C - | tt-ngrams.perl -n 2

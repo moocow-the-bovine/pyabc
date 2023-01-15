@@ -23,5 +23,6 @@ setup(
     # @TODO url='https://github.com/pypa/sampleproject'
     author='Campagnola',
     python_requires='>3.6',
+    scripts=['abcgrep.py'],
     # @TODO install_requires=['peppercorn'],
 )
