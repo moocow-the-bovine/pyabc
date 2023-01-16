@@ -5,7 +5,7 @@ import copy
 import pyabc
 import re
 
-from pyabc import Tune, Phrase
+from pyabc import Tune, Phrase, Grid
 
 ##======================================================================
 ## utils
@@ -380,6 +380,29 @@ def cat(abcfile, ids, meta):
         print(tune.body(), end='')
         last_was_newline = isinstance(tune.tokens[-1], (pyabc.NewlineToken, pyabc))
 
+
+##======================================================================
+## command: grid
+@cli.command()
+@click.option('-e', '-x', '--id', 'ids', type=str, default='',
+              help='tune selection list (ranges): reference (X:)')
+@click.argument('abcfile', type=click.File('r', encoding='utf8'), default='-')
+def grid(abcfile, ids):
+    """
+    (WIP) get a rhythmic grid for tune(s).
+    """
+    tunes = load_tunes(abcfile)
+    tunes = list(select_tunes(tunes, ids=parse_ranges(ids)))
+
+    from pprint import pp
+    for tune in tunes:
+        ##-- DEBUG
+        for tic, token in Phrase(tune).by_tic():
+            print(f'{tic} {str(token)}')
+        ##--/DEBUG
+        grid = Grid(tune)
+        print(tune.head())
+        pp(grid.grid)
 
 ##======================================================================
 ## TODO

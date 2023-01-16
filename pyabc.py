@@ -30,6 +30,14 @@ BGB AFD G2 D| GAB dge dBA| BGB AFA G2 A| BAG FAG FED:|
 ~g3 eBe e2 f|~g3 efg afd| ~g3 eBe g2 a|bag fag fed:|
 eB/B/B e2f ~g3|eB/B/B efg afd| eB/B/B e2f g2a|bag fag fed:|
 edB dBA G2D|GAB dge dBA|edB dBA G2A|BAG FAG FED:|
+""",
+"""
+X:42
+T:test tics
+M:4/4
+L:1/8
+K:C
+[AB] C2 D2 [EF] | (3abc (5defg^g a'2 b'2 ||
 """
 ]
 
@@ -325,13 +333,18 @@ class TimeSignature(object):
         ]))
 
     @property
+    def meter_length(self):
+        return self._meter[0] / self._meter[1]
+
+    @property
+    def unit_length(self):
+        return self._unit_len[0] / self._unit_len[1]
+
+    @property
     def bar_length(self):
         """Return length of a bar in elementary units"""
-        return (
-            (self._meter[0] / self._meter[1])
-            /
-            (self._unit_len[0] / self._unit_len[1])
-        )
+        return self.meter_length / self.unit_length
+
 
 
 # Decoration symbols from
@@ -433,7 +446,6 @@ class Extended(Token):
         return data
 
 class Note(Extended):
-    # TODO: fix duration for triplets etc.
     def __init__(self, key, time, note, accidental, octave, num, denom, **kwds):
         Extended.__init__(self, time, num, denom, **kwds)
         self.key = key
@@ -644,7 +656,7 @@ class Tune(object):
         self.header = h
         self.reference = h['reference number']
         self.title = h['tune title']
-        self.key = h['key']
+        self.key = h.get('key', 'C')
 
     def parse_tune(self, tune):
         self.tokens = self.tokenize(tune, self.header)
@@ -842,7 +854,8 @@ class Tune(object):
                 if isinstance(tokens[j], Extended):
                     tuplet_count += 1
                     note_length = list(tokens[j].length)
-                    note_length[0] *= 2
+                    ##-- TODO: wonky for 5-tuplets etc.?
+                    note_length[0] *= round(0.25 / self.time_sig.unit_length) # *= 2
                     note_length[1] *= tuplet_num
                     tokens[j]._length = tuple(note_length)
                 if tuplet_count >= tuplet_num:
@@ -869,6 +882,15 @@ class Tune(object):
                 line for line in self.abc.split('\n')
                 if re.match(r'^[A-Z]\s*:', line)
             ]))
+
+    def as_phrase(self):
+        return Phrase(self)
+
+    def __str__(self):
+        return f'{self.head()}\n{self.body()}'.strip() + '\n'
+
+    def __repr__(self):
+        return f'<{type(self).__name__} #{self.reference}: {repr(self.title)}>'
 
     def imply_parts(self):
         """
@@ -1028,9 +1050,9 @@ class Phrase:
         """
         return a dictionary from bar-numbers to sub-phrases
         - first full bar has bar-number 1
-        - bar numbers are only incremented on full bars (according to tune timesig)
         - partial intro bar(s) (if present) have bar-number 0
-        #- other partial bars are attached to preceding bar
+        #- non-initial partial bars are attached to preceding bar
+        #- bar numbers are only incremented on full bars (according to tune timesig)
         """
         tokens = self.tokens
         bars_raw = list(self.bars())
@@ -1055,6 +1077,31 @@ class Phrase:
                 bar.label = re.sub(r':b\d+$', f':b{bar_number}', bar.label)
                 bar_number += 1
         return bars
+
+    def by_tic(self, start=1):
+        """
+        Yield a stream of (tic, token) pairs.
+        Resets tic on bar boundaries.
+        """
+        tic = start
+        in_chord = 0
+        chord_tics = []
+        for tok in self.tokens:
+            yield (tic, tok)
+            if isinstance(tok, Beam):
+                tic = start
+            elif isinstance(tok, ChordBracket):
+                if str(tok) == '[':
+                    in_chord = True
+                    chord_tics.clear()
+                else:
+                    in_chord = False
+                    tic += max(chord_tics)
+            elif isinstance(tok, Extended):
+                if in_chord:
+                    chord_tics.append(tok.duration)
+                else:
+                    tic += tok.duration
 
     def prune(self, want=None, default=False):
         """
@@ -1092,6 +1139,40 @@ class Phrase:
 
 
 ##======================================================================
+class Grid:
+    def __init__(self, tune_or_phrase):
+        if isinstance(tune_or_phrase, Tune):
+            self.tune = tune_or_phrase
+            self.phrase = Phrase(self.tune)
+        else:
+            self.tune = tune_or_phrase.tune
+            self.phrase = tune_or_phrase
+        self.grid = {} # grid[bar_number][tic_number] = list(tokens)
+        self.bootstrap()
+
+    @property
+    def tokens(self):
+        return self.phrase.tokens
+
+    @property
+    def abc(self):
+        return self.phrase.abc
+
+    def __repr__(self):
+        return f'{type(self).__name__}(' + repr(self.phrase) + ')'
+
+    def bootstrap(self):
+        self.grid.clear()
+        def qtic(tic):
+            return int(round(tic, 5))
+        for bar_num, bar in self.phrase.by_bar().items():
+            bar_grid = self.grid.setdefault(bar_num, {})
+            for tic_onset, token in bar.by_tic():
+                for tic in range(qtic(tic_onset), qtic(tic_onset + max(1, getattr(token, 'duration', 1)))):
+                    bar_grid.setdefault(tic, []).append(token)
+        return self
+
+##======================================================================
 ## moo: utils
 
 def preceding_bar(tokens, offset):
@@ -1107,9 +1188,6 @@ def following_bar(tokens, offset):
         if isinstance(tokens[j], Beam):
             return j
     return len(tokens)
-
-def tuplet_length(tokens, offset):
-    """Return number """
 
 
 ##======================================================================
