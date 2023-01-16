@@ -830,6 +830,24 @@ class Tune(object):
             if not isinstance(tokens[-1], Continuation):
                 tokens.append(Newline(line=i, char=j, text='\n'))
 
+        ##-- normalize tuplet durations
+        tuplet_offsets = [
+            i for i in range(len(tokens))
+            if isinstance(tokens[i], Tuplet)
+        ]
+        for i in tuplet_offsets:
+            tuplet_num = int(tokens[i].num)
+            tuplet_count = 0
+            for j in range(i + 1, len(tokens)):
+                if isinstance(tokens[j], Extended):
+                    tuplet_count += 1
+                    note_length = list(tokens[j].length)
+                    note_length[0] *= 2
+                    note_length[1] *= tuplet_num
+                    tokens[j]._length = tuple(note_length)
+                if tuplet_count >= tuplet_num:
+                    break
+
         return tokens
 
     def pitchogram(tune):
@@ -1089,6 +1107,9 @@ def following_bar(tokens, offset):
         if isinstance(tokens[j], Beam):
             return j
     return len(tokens)
+
+def tuplet_length(tokens, offset):
+    """Return number """
 
 
 ##======================================================================
