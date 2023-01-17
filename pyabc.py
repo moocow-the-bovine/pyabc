@@ -763,11 +763,10 @@ class Tune(object):
                 m = re.match(r'([XZxz])(\d+)?(/(\d+)?)?', part)
                 if m is not None:
                     g = m.groups()
+                    num = int(g[1]) if g[1] is not None else 1
                     if g[0].isupper():
                         # char==X or Z means length is in measures
-                        num = int(g[1]) * time_sig.bar_length()
-                    else:
-                        num = int(g[1])
+                        num *= time_sig.bar_length()
                     tokens.append(Rest(g[0], time=time_sig, num=num, denom=g[3], line=i, char=j, text=m.group()))
 
                     if pending_dots is not None:
@@ -929,7 +928,7 @@ class Phrase:
         self.tune = tune
         self.label = label if label is not None else tune.title
         self.start = start
-        self.end = end if end is not None else len(tune.tokens)
+        self.end = end if end is not None else len(tune.tokens) if tune is not None else None
 
     def sever(self, trim=False):
         """
@@ -1136,6 +1135,10 @@ class Phrase:
             last_was_space = isinstance(tok, WhitespaceToken)
         pruned.tune.tokens = tokens
         return pruned
+
+    def melody(self):
+        """Generate a stream of melodic tokens (notes and rests)"""
+        return filter(lambda tok: isinstance(tok, Extended), self.tokens)
 
 
 ##======================================================================

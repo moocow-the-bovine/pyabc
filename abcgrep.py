@@ -380,9 +380,34 @@ def cat(abcfile, ids, meta):
         print(tune.body(), end='')
         last_was_newline = isinstance(tune.tokens[-1], (pyabc.NewlineToken, pyabc))
 
+##======================================================================
+## command: collate
+@cli.command()
+@click.option('-e', '-x', '--id', 'ids', type=str, default='',
+              help='tune selection list (ranges): reference (X:)')
+@click.argument('abcfile', type=click.File('r', encoding='utf8'), default='-')
+def collate(abcfile, ids):
+    """
+    Collate distinct variations.
+    Input tunes are collated by melody and output as lines / parts.
+    """
+    tunes = load_tunes(abcfile)
+    tunes = list(select_tunes(tunes, ids=parse_ranges(ids)))
+
+    melody2phrases = {}
+    for phrase in map(Phrase, tunes):
+        key = ''.join(map(str, phrase.melody()))
+        melody2phrases.setdefault(key, []).append(phrase)
+
+    print(tunes[0].head())
+    for key, phrases in sorted(melody2phrases.items(), key=lambda kp: len(kp[1]), reverse=True):
+        phrase = phrases[0].prune(want={'Newline': False, 'Continuation': False}, default=True)
+        abc = re.sub(r'\s*[:|\]]*$', '', phrase.abc.strip()) # strip final bars
+        print(f'[P:{key} - ({len(phrases)})] {abc} ||')
+
 
 ##======================================================================
-## command: grid
+## command: grid - TODO
 @cli.command()
 @click.option('-e', '-x', '--id', 'ids', type=str, default='',
               help='tune selection list (ranges): reference (X:)')
