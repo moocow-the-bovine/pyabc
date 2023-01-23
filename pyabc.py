@@ -1,5 +1,6 @@
 from __future__ import division
 import copy
+from fractions import Fraction
 import re, sys
 
 
@@ -32,12 +33,20 @@ eB/B/B e2f ~g3|eB/B/B efg afd| eB/B/B e2f g2a|bag fag fed:|
 edB dBA G2D|GAB dge dBA|edB dBA G2A|BAG FAG FED:|
 """,
 """
-X:42
+X:7
 T:test tics
 M:4/4
 L:1/8
 K:C
 [AB] C2 D2 [EF] | (3abc (5defg^g a'2 b'2 ||
+""",
+"""
+X:8
+T:test stretch
+M:2/4
+L:1/8
+K:F
+A/B/C/D/ z G/^G/ | Z2 |]
 """
 ]
 
@@ -214,6 +223,10 @@ class Key(object):
     def __repr__(self):
         return "<Key %s %s>" % (self.root.name, self.mode)
 
+    def pitch_str(self, pitch):
+        """Get abc pitch string with respect to this key"""
+        p = pitch.name[0] if pitch.name in self.key_signature else pitch.name
+
 ##======================================================================
 class Pitch(object):
     def __init__(self, value, octave=None):
@@ -268,6 +281,20 @@ class Pitch(object):
     def abs_value(self):
         return self.value + self.octave * 12
 
+    def abc_pitch(self, key=None, accidentals=False):
+        """Return abc pitch string relative to key, including accidentals."""
+        abc = ''
+        if accidentals and (key is None or self.name not in key.key_signature):
+            abc = self.name[1:].replace('b','_').replace('#','^')
+        abc += self.name[0]
+        octave = self.octave or 0
+        if octave > 0:
+            abc = abc.lower()
+            abc += "'" * (octave - 1)
+        else:
+            abc += "," * (-octave)
+        return abc
+
     def to_json(self):
         return {
             'name': self.name,
@@ -317,7 +344,7 @@ class Pitch(object):
 ##======================================================================
 class TimeSignature(object):
     def __init__(self, meter, unit_len, tempo=None):
-        meter = meter.replace('C|', '2/2').replace('C', '4/4')
+        meter = meter.replace('C|', '2/2').replace('C', '4/4').replace('1/1', '4/4')
         self._meter = [int(x) for x in meter.split('/')]
         self._unit_len = [int(x) for x in unit_len.split('/')]
         self._tempo = tempo
@@ -345,7 +372,13 @@ class TimeSignature(object):
         """Return length of a bar in elementary units"""
         return self.meter_length / self.unit_length
 
-
+    def stretch_meter(self, frac):
+        """Stretch meter to accommodate multiplying all note lengths by ``frac``"""
+        prev = Fraction(*self._meter)
+        self._meter[0] *= frac.numerator
+        self._meter[1] *= frac.denominator
+        if self._tempo:
+            self._tempo = int(frac * self._tempo)
 
 # Decoration symbols from
 # http://abcnotation.com/wiki/abc:standard:v2.1#decorations
@@ -439,6 +472,30 @@ class Extended(Token):
         """Event duration in tics (float)"""
         return self.length[0] / self.length[1]
 
+    @staticmethod
+    def _abc_length(num, denom):
+        """Return abc length suffix for a length tuple"""
+        lf = Fraction(num, denom)
+        if lf.numerator == 1:
+            if lf.denominator == 1:
+                return ''
+            elif lf.denominator == 2:
+                return '/'
+            else:
+                return f'/{lf.denominator}'
+        elif lf.denominator == 1:
+            return str(lf.numerator)
+        else:
+            return f'{lf.numerator}/{lf.denominator}'
+
+    def abc_length(self):
+        """Return abc length suffix for this event"""
+        return self._abc_length(*self.length)
+
+    def stretch(self, frac):
+        """Stretch length by Fraction ``frac``"""
+        self._length = (Fraction(*self.length) * frac).as_integer_ratio()
+
     def to_json(self):
         data = super().to_json()
         data['length'] = list(self.length)
@@ -458,6 +515,17 @@ class Note(Extended):
         """Chromatic note value taking into account key signature and transpositions.
         """
         return Pitch(self)
+
+    def abc_canonical(self):
+        #TODO: fix duration suffix for tuplets
+        # - abcm2ps says "Bad length divisor" for e.g. "(3A4/9B4/9c4/9 "
+        # - should really map to just "(3ABC"
+        return (self.accidental or '') + self.pitch.abc_pitch(accidentals=False) + self.abc_length()
+
+    def stretch(self, frac):
+        """Stretch length by Fraction ``frac``"""
+        super().stretch(frac)
+        self._text = self.abc_canonical()
 
     def dotify(self, dots, direction):
         """Apply dot(s) to the duration of this note.
@@ -484,6 +552,7 @@ class Note(Extended):
         data['octave'] = self.octave
         data['pitch'] = self.pitch.to_json()
         return data
+
 
 
 class Beam(Token):
@@ -566,11 +635,21 @@ class InlineField(Token):
 
 class Rest(Extended):
     def __init__(self, symbol, time, num, denom, **kwds):
-        # char==X or Z means length is in measures
+        # char==X or Z means length is in measures -- should be handled by parse_abc()
         Extended.__init__(self, time, num, denom, **kwds)
         self.symbol = symbol
         self.length_ = (num, denom)
 
+    def stretch(self, frac):
+        """Stretch length by Fraction ``frac``"""
+        super().stretch(frac)
+
+    def __str__(self):
+        if self.symbol.isupper():
+            len_ = self.length
+            return self.symbol + Extended._abc_length(int(len_[0] / self.time_sig.bar_length), len_[1])
+        else:
+            return self.symbol + self.abc_length()
 
 ##======================================================================
 class InfoContext(object):
@@ -766,7 +845,7 @@ class Tune(object):
                     num = int(g[1]) if g[1] is not None else 1
                     if g[0].isupper():
                         # char==X or Z means length is in measures
-                        num *= time_sig.bar_length()
+                        num *= time_sig.bar_length
                     tokens.append(Rest(g[0], time=time_sig, num=num, denom=g[3], line=i, char=j, text=m.group()))
 
                     if pending_dots is not None:
@@ -897,14 +976,22 @@ class Tune(object):
         Invalidates unsevered phrases and self.abc.
         """
         part_bars = []
+        has_part_bars = any(str(tok).endswith('||') for tok in self.tokens)
+        def is_part_bar(tok):
+            if not isinstance(tok, Beam):
+                return False
+            elif has_part_bars:
+                return str(tok).endswith('||')
+            else:
+                return re.search(r'[:|][\]\|]$', str(tok))
         for j in range(len(self.tokens)):
             tok = self.tokens[j]
             if isinstance(tok, InlineField) and tok.key == 'P':
                 return self
-            elif isinstance(tok, Beam) and str(tok).endswith('||'):
+            elif is_part_bar(tok):
                 part_bars.append(j)
         if not part_bars:
-            return
+            return self
 
         # add part labels after every part bar
         part_bars = list(zip(
@@ -918,6 +1005,38 @@ class Tune(object):
                 Space(-1, -1, f' '), # othewise parse errors ':|['
             ):
                 self.tokens.insert(offset + 1, x)
+        return self
+
+    def stretch(self, num=2, denom=1):
+        """
+        Scale all note lengths by ``num/denom``.
+        Also tweaks the time signature.
+        """
+        # stretch tokens
+        frac = Fraction(num, denom)
+        for tok in self.tokens:
+            if isinstance(tok, Extended):
+                tok.stretch(frac)
+
+        # stretch tune time signature
+        seen = {id(self.time_sig)}
+        self.time_sig.stretch_meter(frac)
+        for tok in self.tokens:
+            if isinstance(tok, Extended) and id(tok.time_sig) not in seen:
+                tok.time_sig.stretch_meter(frac)
+
+        # tweak abc header
+        lines = []
+        changed = False
+        for line in self.abc.split('\n'):
+            if re.match('^[ML]:', line):
+                if not changed:
+                    lines.append(str(self.time_sig))
+                    changed = True
+            else:
+                lines.append(line)
+        self.abc = '\n'.join(lines)
+
         return self
 
 
@@ -952,6 +1071,8 @@ class Phrase:
 
     @property
     def tokens(self):
+        if self.tune is None:
+            return []
         return self.tune.tokens[self.start:self.end]
 
     @property
@@ -1139,6 +1260,7 @@ class Phrase:
     def melody(self):
         """Generate a stream of melodic tokens (notes and rests)"""
         return filter(lambda tok: isinstance(tok, Extended), self.tokens)
+
 
 
 ##======================================================================

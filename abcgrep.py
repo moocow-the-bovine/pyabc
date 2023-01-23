@@ -140,7 +140,7 @@ def select_tunes(tunes, ids=(), **kwargs):
 @click.option('-e', '-x', '--id', 'ids', type=str, default='',
               help='tune selection list (ranges): reference (X:)')
 @click.option('-p', '--part', type=str, help='selection regex: part (P:)')
-@click.option('-b', '--bar', type=str,
+@click.option('-b', '-m', '--bar', '--measure', 'bar', type=str,
               help='selection ranges: bar number (ranges)')
 @click.argument('abcfile', type=click.File('r', encoding='utf8'), default='-')
 def phrases(abcfile, ids, part, bar):
@@ -401,9 +401,11 @@ def collate(abcfile, ids):
 
     print(tunes[0].head())
     for key, phrases in sorted(melody2phrases.items(), key=lambda kp: len(kp[1]), reverse=True):
-        phrase = phrases[0].prune(want={'Newline': False, 'Continuation': False}, default=True)
-        abc = re.sub(r'\s*[:|\]]*$', '', phrase.abc.strip()) # strip final bars
-        print(f'[P:{key} - ({len(phrases)})] {abc} ||')
+        canon = phrases[0].prune(want={'Newline': False, 'Continuation': False}, default=True)
+        abc = re.sub(r'\s*[:|\]]*$', '', canon.abc.strip()) # strip final bars
+        for phrase in phrases:
+            print(f'% {phrase.label}')
+        print(f'[P:{key} - ({len(phrases)})]\n{abc} ||')
 
 
 ##======================================================================
@@ -429,13 +431,35 @@ def grid(abcfile, ids):
         print(tune.head())
         pp(grid.grid)
 
+
+##======================================================================
+## command: stretch
+@cli.command()
+@click.option('-e', '-x', '--id', 'ids', type=str, default=None,
+              help='selection list (space- or comma-separated list of ranges): reference (X:)')
+@click.option('-n', '--num', '--numerator', 'num', type=int, default=1,
+              help='new unit length numerator')
+@click.option('-d', '--denominator', '--denom', 'denom', type=int, default=1,
+              help='new unit length denominator')
+@click.argument('abcfile', type=click.File('r', encoding='utf8'), default='-')
+def stretch(abcfile, ids, num, denom):
+    """
+    Transform time-signature (meter) and note lengths by multiplying all
+    note-lengths by ``num/denom``.
+    """
+    tunes = load_tunes(abcfile)
+    tunes = list(select_tunes(tunes, ids=parse_ranges(ids)))
+    for tune in tunes:
+        tune = tune.stretch(num, denom)
+        print(str(tune))
+
 ##======================================================================
 ## TODO
 ## - pyabc alternatives
 ##   - checkout abcdb parser -> buried pretty deep
 ## - pyabc tweaks
 ##   + [X] fork on github
-##   + [~] "canonical" output (not just input abc) from tune.tokens --> __str__ method on tokens
+##   + [X] "canonical" output (not just input abc) from tune.tokens --> __str__ method on tokens
 ## - [ ] select phrases
 ##   + [X] by part
 ##     - [X] implicitly add part-labels (if none ever specified)
@@ -444,14 +468,14 @@ def grid(abcfile, ids):
 ##   + [ ] by (part & measure &) beat-ranges?
 ##   + [ ] by (part & measure & beat &) n-grams?
 ## - transform
-##   + [ ] "grid" / "typewriter" / "quantize": all notes/rests to unit length
+##   + [-] "grid" / "typewriter" / "quantize": all notes/rests to unit length
 ##     - triplets get bogus length=[1,1], duration=1.0
 ##     - maybe first parse to rhythm-tree?
-##   + [ ] re-sample (transform rhythms, e.g. Ryan's-style 16ths to 8ths under L:1/8)
+##   + [X] re-sample (transform rhythms, e.g. Ryan's-style 16ths to 8ths under L:1/8)
 ##     - set target note-length?
-##     - DO THIS: or just bash-down by integer factor (e.g. 2x: 16ths->8ths, 8ths->quarters, etc.)
-##   + [ ] notes-only
-##      - [ ] remove gracenotes, bars, inline fields, chords, ...
+##     - [X] just bash-up/down by integer factor (e.g. 2x: 16ths->8ths, 8ths->quarters, etc.)
+##   + [X] notes-only -> filter
+##      - [X] remove gracenotes, bars, inline fields, chords, ...
 ##   + [ ] transpose (give target key?)
 ##   + [ ] set chords (or copy progression from other tune):
 ##     - get-chords | set-chords ?
@@ -460,13 +484,22 @@ def grid(abcfile, ids):
 ## - counts
 ##   + [ ] ngrams (phrases?) --> only starting on full beat?  on beat 1 or 3?
 ##     - raw ngrams can be e.g.: python ./abcgrep.py tokens -n -C - | tt-ngrams.perl -n 2
-##   + [ ] measures (phrases)
+##   + [X] measures (phrases) -> collate
+##     - maybe alternate format here
+## - I/O
+##   + [ ] to/from json(l)
+##   + [ ] grid/collate/table/ngram formats
+##   + [ ] render -> ps (-> gv)
 ## - grouping
-##   + [ ] by "melodic signature":
+##   + [ ] by "melodic signature"
 ##     - (chord_symbol?, start_note, end_note)
 ##     - (chord_symbol(s)?, start_note, next_note_after_end)
+##   + [ ] as (W)FSA
+##     - by part? measure? phrase? note? tic?
+##     - bell/whistle: render as dot-style graph with staff notation
 ## - [ ] cluster ... on projected content
-##   + minhash?  pairwise jaccard?
+##   + minhash?  pairwise jaccard?  levenshtein/hamming on grid?
+
 
 ##======================================================================
 ## click cruft
