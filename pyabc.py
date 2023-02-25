@@ -455,7 +455,7 @@ class Token(object):
         return {'text':self._text, 'line':self._line, 'char':self._char, 'type':type(self).__name__}
 
 class Extended(Token):
-    """Token with a length (Pitch or Rest)"""
+    """Token with a length (Note or Rest)"""
     def __init__(self, time, num, denom, **kwds):
         Token.__init__(self, **kwds)
         self.time_sig = time
@@ -820,7 +820,7 @@ class Tune(object):
                     continue
 
                 # Beam  |   :|   |:   ||   and Chord  [ABC]
-                m = re.match(r'([\[\]\|\:]+)([0-9\-,])?', part)
+                m = re.match(r'([\[\]\|\:]+)([0-9\-,]+)?', part)
                 if m is not None:
                     if m.group() in '[]':
                         tokens.append(ChordBracket(line=i, char=j, text=m.group()))
@@ -830,10 +830,15 @@ class Tune(object):
                     continue
 
                 # Broken rhythm
-                if len(tokens) > 0 and isinstance(tokens[-1], (Note, Rest)):
+                if len(tokens) > 0 and isinstance(tokens[-1], (Note, Rest, ChordBracket)):
+                    if isinstance(tokens[-1], ChordBracket):
+                        broken_tokens = list(chord_extent(tokens, end=len(tokens)-1))
+                    else:
+                        broken_tokens = (tokens[-1],)
                     m = re.match('<+|>+', part)
                     if m is not None:
-                        tokens[-1].dotify(part, 'left')
+                        for t in broken_tokens:
+                            t.dotify(part, 'left')
                         pending_dots = part
                         j += m.end()
                         continue
@@ -1300,20 +1305,49 @@ class Grid:
 ##======================================================================
 ## moo: utils
 
-def preceding_bar(tokens, offset):
-    """Return index of last Beam at-or-before offset (inclusive), or -1"""
+def preceding_token(tokens, offset, predicate):
+    """
+    Return index of last token with ``predicate(token) == True`` at-or-before offset (inclusive), or -1
+    """
     for j in range(offset, -1, -1):
-        if isinstance(tokens[j], Beam):
+        if predicate(tokens[j]):
             return j
     return -1
 
-def following_bar(tokens, offset):
-    """Return index of first Beam at-or-after offset, or len(tokens)"""
+def following_token(tokens, offset, predicate):
+    """
+    Return index of first token with ``predicate(token) == True`` at-or-after offset (inclusive), or len(tokens)
+    """
     for j in range(offset, len(tokens)):
-        if isinstance(tokens[j], Beam):
+        if predicate(token):
             return j
     return len(tokens)
 
+
+def preceding_bar(tokens, offset):
+    """Return index of last Beam at-or-before offset (inclusive), or -1"""
+    return preceding_token(tokens, offset, lambda t: isinstance(t, Beam))
+
+def following_bar(tokens, offset):
+    """Return index of first Beam at-or-after offset, or len(tokens)"""
+    return following_token(tokens, offset, lambda t: isinstance(t, Beam))
+
+def preceding_chordbracket(tokens, offset):
+    """Return index of last '[' at-or-before offset (inclusive), or -1"""
+    return preceding_token(tokens, offset, lambda t: isinstance(t, ChordBracket) and t._text == '[')
+
+def following_chordbracket(tokens, offset):
+    """Return index first ']' at-or-after offset (inclusive), or -1"""
+    return following_token(tokens, offset, lambda t: isinstance(t, ChordBracket) and t._text == ']')
+
+def chord_extent(tokens, start=None, end=None):
+    """Generator for notes (and rests) of a chord, specifying either start or end (= offset of a ChordBracket)"""
+    assert((start is not None) or (end is not None))
+    if start is None:
+        start = preceding_chordbracket(tokens, end)
+    elif end is None:
+        end = following_chordbracket(start, end)
+    return filter(lambda t: isinstance(t, Extended), tokens[start:end])
 
 ##======================================================================
 def get_thesession_tunes():
