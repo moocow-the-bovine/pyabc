@@ -558,6 +558,9 @@ class Note(Extended):
 class Beam(Token):
     pass
 
+class Ending(Token):
+    """Variant ending label (1, 2, etc).; formerly part of Beam"""
+
 class WhitespaceToken(Token):
     pass
 
@@ -819,13 +822,15 @@ class Tune(object):
                     j += m.end()
                     continue
 
-                # Beam  |   :|   |:   ||   and Chord  [ABC]
+                # Beam  |   :|   |:   ||     Ending  [1  [2    and Chord  [ABC]
                 m = re.match(r'([\[\]\|\:]+)([0-9\-,]+)?', part)
                 if m is not None:
                     if m.group() in '[]':
                         tokens.append(ChordBracket(line=i, char=j, text=m.group()))
                     else:
-                        tokens.append(Beam(line=i, char=j, text=m.group()))
+                        tokens.append(Beam(line=i, char=j, text=m.group(1)))
+                    if m.group(2):
+                        tokens.append(Ending(line=i, char=j+m.start(2), text=m.group(2)))
                     j += m.end()
                     continue
 
@@ -968,6 +973,13 @@ class Tune(object):
 
     def as_phrase(self):
         return Phrase(self)
+
+    def expand(self, verbose=False):
+        phrase = self.as_phrase()
+        phrase.expand(verbose=verbose)
+        self.tokens = phrase.tokens
+        #self.abc = phrase.abc
+        return self
 
     def __str__(self):
         return f'{self.head()}\n{self.body()}'.strip() + '\n'
@@ -1130,10 +1142,12 @@ class Phrase:
         return self._id2x[id(self)]
 
 
-    def slice(self, start=0, end=None, label=None):
+    def slice(self, start=0, end=None, label=None, label_suffix=None):
         """start, end are relative to self"""
         end = end if end is not None else len(self)
         label = f'{self.label}[{start}:{end}]' if label is None else label
+        if label_suffix:
+            label += label_suffix
         return type(self)(self.tune, self.start+start, self.start+end, label)
 
     def by_part(self, label=''):
@@ -1266,6 +1280,77 @@ class Phrase:
         """Generate a stream of melodic tokens (notes and rests)"""
         return filter(lambda tok: isinstance(tok, Extended), self.tokens)
 
+    def expand(self, verbose=True):
+        """Serialize by expanding repeats (implies sever)"""
+        self.sever(trim=True)
+        tokens = self.tokens
+        xtokens = []
+        rranges = list(repeat_ranges(self.tokens))
+        cur = 0
+
+        for ri, rj, ei in rranges:
+            if ri > cur:
+                xtokens.extend(repeat_tokens(tokens, cur, ri, None, verbose))
+                cur = ri
+            xtokens.extend(repeat_tokens(tokens, ri, rj, ei, verbose))
+
+        self.tune.tokens = xtokens
+        self.start = 0
+        self.end = len(xtokens)
+        self.label += f':EXPAND'
+
+
+def repeat_tokens(tokens, start, end, ending_offset, verbose=False):
+    """generate repeated tokens, honoring variant endings"""
+    wanted = True
+    if verbose and start < len(tokens):
+        token = tokens[start]
+        yield InlineField(line=token._line, char=token._char, text=f'[r:repeat({start}:{end}~{ending_offset})]')
+        yield Space(line=token._line, char=token._char, text=' ')
+        wanted = True
+    for i in range(start, end):
+        token = tokens[i]
+        if isinstance(token, Ending):
+            # suppress non-matching variant endings
+            wanted = (i == ending_offset)
+            if verbose and wanted:
+                yield InlineField(line=token._line, char=token._char, text=f'[r:ending={str(token)}]')
+                yield Space(line=token._line, char=token._char, text=' ')
+            continue
+        if not wanted:
+            # suppress other variant endings
+            continue
+        elif isinstance(token, Beam):
+            # replace repeats with plain bars
+            tok = copy.copy(token)
+            tok._text = re.sub(r'[:]', '', tok._text)
+            if tok._text and tok._text != '[':
+                yield tok
+        else:
+            yield token
+
+def repeat_ranges(tokens):
+    """Generator for repeated ranges; yields tuples (start_offset, end_offset, variant_ending_offset)"""
+    start_offset = 0    # starting offset of current (repeated) section
+    index_offset = None # variant-ending index
+    for i, token in enumerate(tokens):
+        if isinstance(token, Ending):
+            # variant ending of a repeated section
+            index_offset = i
+        if isinstance(token, Beam):
+            if str(token).startswith(':'):
+                # repeated section ends here
+                yield (start_offset, i+1, index_offset)
+                index_offset = None
+            #elif index_offset is not None and re.search(r'[:\|][\]\|]$', str(token)):
+            #    # variant ending ends here (and so does repeated section)
+            #    yield (start_offset, i, index_offset)
+            #    index_offset = None
+            if str(token).endswith(':'):
+                # repeated section starts here
+                start_offset = i
+    # final range (including final variant ending, if any)
+    yield (start_offset, len(tokens), index_offset)
 
 
 ##======================================================================
@@ -1319,18 +1404,20 @@ def following_token(tokens, offset, predicate):
     Return index of first token with ``predicate(token) == True`` at-or-after offset (inclusive), or len(tokens)
     """
     for j in range(offset, len(tokens)):
-        if predicate(token):
+        if predicate(tokens[j]):
             return j
     return len(tokens)
 
+def is_bar(token):
+    return isinstance(token, Beam) and '|' in token._text
 
 def preceding_bar(tokens, offset):
     """Return index of last Beam at-or-before offset (inclusive), or -1"""
-    return preceding_token(tokens, offset, lambda t: isinstance(t, Beam))
+    return preceding_token(tokens, offset, is_bar)
 
 def following_bar(tokens, offset):
     """Return index of first Beam at-or-after offset, or len(tokens)"""
-    return following_token(tokens, offset, lambda t: isinstance(t, Beam))
+    return following_token(tokens, offset, is_bar)
 
 def preceding_chordbracket(tokens, offset):
     """Return index of last '[' at-or-before offset (inclusive), or -1"""
@@ -1348,6 +1435,7 @@ def chord_extent(tokens, start=None, end=None):
     elif end is None:
         end = following_chordbracket(start, end)
     return filter(lambda t: isinstance(t, Extended), tokens[start:end])
+
 
 ##======================================================================
 def get_thesession_tunes():
