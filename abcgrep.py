@@ -222,27 +222,36 @@ def part_bars(parent_phrase, bar_ranges):
 @cli.command()
 @click.option('-e', '-x', '--id', 'ids', type=str, default='',
               help='tune selection list (ranges): reference (X:)')
-@click.option('--imply-parts/--no-imply-parts', type=bool, default=True,
-              help='imply parts?')
+@click.option('-v/-r', '--verbose/--raw', type=bool, default=False,
+              help='verbose tokens?')
 @click.option('-o', '--output', type=click.File('w', encoding='utf8'), default='-',
               help='output file')
 @click.argument('abcfile', type=click.File('r', encoding='utf8'), default='-')
-def jsonl(abcfile, output, ids, imply_parts):
+def jsonl(abcfile, output, ids, verbose):
     """
     Print verbose tune abc tokens as JSONL (1 token per line).
     """
     tunes = load_tunes(abcfile)
     tunes = list(select_tunes(tunes, ids=parse_ranges(ids)))
     import json
+
+    def raw_tokens(tokens, *args, **kwargs):
+        for token in tokens:
+            yield {}, token
+    _get_tokens = verbose_tokens if verbose else raw_tokens
+
     for tune in tunes:
-        if imply_parts: tune.imply_parts()
-        tune_info = {'reference': tune.reference, 'title': tune.title, 'header': tune.header, 'key': tune.key}
+        tune_info = {}
+        if verbose:
+            tune.imply_parts()
+            tune_info = {'reference': tune.reference, 'title': tune.title, 'header': tune.header, 'key': tune.key}
+
         offset = 0
-        for ctx, token in verbose_tokens(tune.tokens, {'key':tune.key, 'bar':1}):
-            row = token.to_json()
-            row['offset'] = offset
-            row['tune'] = tune_info
-            row['context'] = ctx
+        for ctx, token in _get_tokens(tune.tokens, {'key':tune.key, 'bar':1}):
+            row = {'offset': offset, **token.to_json()}
+            if (verbose):
+                row['tune'] = tune_info
+                row['context'] = ctx
             json.dump(row, output, separators=(',', ':'))
             output.write('\n')
             offset += 1
@@ -306,11 +315,13 @@ def verbose_tokens(tokens, defaults=None):
               help="Do/don't include newlines & continuations (default=do)")
 @click.option('-f/-F', '--fields/--no-fields', type=bool, default=False,
               help="Do/don't include inline & body fields (default=don't)")
+@click.option('-g/-G', '--graces/--no-graces', type=bool, default=False,
+              help="Do/don't include gracenotes (default=don't)")
 @click.option('-d/-D', '--decorations/--no-decorations', type=bool, default=False,
               help="Do/don't include decorations, slurs, ties, gracenotes etc. (default=don't)")
 #TODO: Slur, Tie, Annotation, Tuplet
 @click.argument('abcfile', type=click.File('r', encoding='utf8'), default='-')
-def prune(abcfile, ids, notes, bars, chords, spaces, lines, fields, decorations):
+def prune(abcfile, ids, notes, bars, chords, spaces, lines, fields, graces, decorations):
     """
     Prune abc content tokens.
     """
@@ -320,12 +331,14 @@ def prune(abcfile, ids, notes, bars, chords, spaces, lines, fields, decorations)
     for tune in tunes:
         phrase = Phrase(tune).prune({
             'Note': notes,
+            'Rest': notes,
             'Beam': bars,
             'ChordSymbol': chords,
             'ChordBracket': chords,
             'Space': spaces,
             'Newline': lines,
             'Continuation': lines,
+            'Gracenotes': graces,
             'InlineField': fields,
             'BodyField': fields,
         }, default=decorations)
@@ -407,7 +420,7 @@ def collate(abcfile, ids):
     print(tunes[0].head())
     for key, phrases in sorted(melody2phrases.items(), key=lambda kp: len(kp[1]), reverse=True):
         canon = phrases[0].prune(want={'Newline': False, 'Continuation': False}, default=True)
-        abc = re.sub(r'\s*[:|\]]*$', '', canon.abc.strip()) # strip final bars
+        abc = re.sub(r'\s*:*\|+\]*$', '', canon.abc.strip()) # strip final bars
         for phrase in phrases:
             print(f'% {phrase.label}')
         print(f'[P:{key} - ({len(phrases)})]\n{abc} ||')

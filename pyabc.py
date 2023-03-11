@@ -553,7 +553,8 @@ class Note(Extended):
         data['pitch'] = self.pitch.to_json()
         return data
 
-
+class Gracenote(Note):
+    pass
 
 class Beam(Token):
     pass
@@ -770,6 +771,7 @@ class Tune(object):
                 tokens.append(BodyField(line=i, char=0, text=line))
                 continue
 
+            note_class = Note
             pending_dots = None
             j = 0
             while j < len(line):
@@ -812,7 +814,7 @@ class Tune(object):
                     else:
                         denom = 1
 
-                    tokens.append(Note(key=key, time=time_sig, note=g['note'], accidental=g['acc'],
+                    tokens.append(note_class(key=key, time=time_sig, note=g['note'], accidental=g['acc'],
                         octave=octave, num=num, denom=denom, line=i, char=j, text=m.group()))
 
                     if pending_dots is not None:
@@ -888,6 +890,10 @@ class Tune(object):
                 m = re.match(r'(\{\\?)|\}', part)
                 if m is not None:
                     tokens.append(GracenoteBrace(line=i, char=j, text=m.group()))
+                    if m.group().startswith('{'):
+                        note_class = Gracenote
+                    else:
+                        note_class = Note
                     j += m.end()
                     continue
 
@@ -1258,6 +1264,7 @@ class Phrase:
                 'Space': True,
                 'Newline': True,
                 'Continuation': True,
+                'Gracenotes': False,
             }
         pruned = self.sever(trim=True)
         pruned.label += ':prune'
@@ -1426,6 +1433,14 @@ def preceding_chordbracket(tokens, offset):
 def following_chordbracket(tokens, offset):
     """Return index first ']' at-or-after offset (inclusive), or -1"""
     return following_token(tokens, offset, lambda t: isinstance(t, ChordBracket) and t._text == ']')
+
+def preceding_gracebracket(tokens, offset):
+    """Return index of last '{' at-or-before offset (inclusive), or -1"""
+    return preceding_token(tokens, offset, lambda t: isinstance(t, GracenoteBrace) and t._text == '[')
+
+def following_gracebracket(tokens, offset):
+    """Return index first '}' at-or-after offset (inclusive), or -1"""
+    return following_token(tokens, offset, lambda t: isinstance(t, GracenoteBrace) and t._text == ']')
 
 def chord_extent(tokens, start=None, end=None):
     """Generator for notes (and rests) of a chord, specifying either start or end (= offset of a ChordBracket)"""
