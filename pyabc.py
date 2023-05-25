@@ -356,7 +356,7 @@ class TimeSignature(object):
         return '\n'.join(filter(bool, [
             f'M:{self._meter[0]}/{self._meter[1]}',
             f'L:{self._unit_len[0]}/{self._unit_len[1]}',
-            (f'T:{self_tempo}' if self._tempo else None),
+            (f'Q:{self._tempo}' if self._tempo else None),
         ]))
 
     @property
