@@ -537,7 +537,11 @@ def stretch(abcfile, ids, num, denom):
 ##     - bell/whistle: render as dot-style graph with staff notation
 ## - [ ] cluster ... on projected content
 ##   + minhash?  pairwise jaccard?  levenshtein/hamming on grid?
-
+## - [ ] pitch histogram
+##   + approx: abcgrep.py jsonl FILE | jq -cr 'select(.type=="Note")|.pitch|[.name, value]|@tsv' | tt-1grams.perl | sort -nk3
+## - [ ] find best key
+##   + idea: use pitch histogram, find key with mininum number of accidentals
+## - [ ] re-assign key without transposing: just tweak accidentals
 
 ##======================================================================
 ## click cruft

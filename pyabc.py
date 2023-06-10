@@ -114,6 +114,7 @@ inline_fields = {k:v for k,v in info_keys.items() if v.inline}
 # map natural note letters to chromatic values
 pitch_values = {'C': 0, 'D': 2, 'E': 4, 'F': 5, 'G': 7, 'A': 9, 'B': 11, }
 accidental_values = {'': 0, '#': 1, 'b': -1}
+accidental_abc2pitch = {'=': ' ', '_': 'b', '^': '#'}
 for n,v in list(pitch_values.items()):
     for a in '#b':
         pitch_values[n+a] = v + accidental_values[a]
@@ -228,24 +229,20 @@ class Key(object):
         p = pitch.name[0] if pitch.name in self.key_signature else pitch.name
 
 ##======================================================================
+
 class Pitch(object):
     def __init__(self, value, octave=None):
         if isinstance(value, Note):
             self._note = value
 
-            note_name = value.note
-            if value.accidental == '_':
-                note_name += 'b'
-            elif value.accidental == '^':
-                note_name += '#'
-
+            note_name = value.note + accidental_abc2pitch.get(value.accidental, '')
             if len(note_name) == 1:
                 acc = value.key.accidentals.get(note_name[0].upper(), '')
                 self._name = note_name.upper() + acc
                 self._value = self.pitch_value(self._name)
             else:
-                self._name = note_name.capitalize()
-                self._value = self.pitch_value(note_name)
+                self._name = note_name.capitalize().strip()
+                self._value = self.pitch_value(note_name.strip())
 
             assert octave is None
             self._octave = value.octave
