@@ -233,13 +233,19 @@ class Pitch(object):
         if isinstance(value, Note):
             self._note = value
 
-            if len(value.note) == 1:
-                acc = value.key.accidentals.get(value.note[0].upper(), '')
-                self._name = value.note.upper() + acc
+            note_name = value.note
+            if value.accidental == '_':
+                note_name += 'b'
+            elif value.accidental == '^':
+                note_name += '#'
+
+            if len(note_name) == 1:
+                acc = value.key.accidentals.get(note_name[0].upper(), '')
+                self._name = note_name.upper() + acc
                 self._value = self.pitch_value(self._name)
             else:
-                self._name = value.note.capitalize()
-                self._value = self.pitch_value(value.note)
+                self._name = note_name.capitalize()
+                self._value = self.pitch_value(note_name)
 
             assert octave is None
             self._octave = value.octave
